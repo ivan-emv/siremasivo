@@ -96,8 +96,11 @@ def init_session():
         st.session_state.guardar_masiva_pendiente = False
     if "masiva_guardado_ok" not in st.session_state:
         st.session_state.masiva_guardado_ok = False
+        st.session_state.masiva_registros_excluidos = {}
     if "masiva_upload_id" not in st.session_state:
         st.session_state.masiva_upload_id = ""
+    if "masiva_registros_excluidos" not in st.session_state:
+        st.session_state.masiva_registros_excluidos = {}
 
 
 def get_gspread_client():
@@ -1135,12 +1138,28 @@ uploaded_file = st.file_uploader(
     key="upload_retrasos_masivo"
 )
 
+def limpiar_estado_editor_masivo():
+    """Limpia valores editables por fila cuando se cambia o retira el archivo cargado."""
+    prefijos = (
+        "masiva_com_", "masiva_excluir_", "masiva_limpiar_com_",
+        "masiva_op_", "masiva_momento_", "masiva_medio_", "masiva_quien_",
+        "masiva_ciudad_", "masiva_tipo_contacto_", "masiva_area_",
+        "masiva_tipo_incidencia_", "masiva_resolucion_", "masiva_resultado_",
+        "masiva_monto_", "masiva_hotel_", "masiva_trayecto_",
+        "masiva_guia_", "masiva_tipo_traslado_",
+    )
+    for key in list(st.session_state.keys()):
+        if str(key).startswith(prefijos):
+            del st.session_state[key]
+
 # Reset del bloqueo cuando no hay archivo o cuando el usuario carga un archivo diferente.
 if uploaded_file is None:
     st.session_state.guardando_masiva = False
     st.session_state.guardar_masiva_pendiente = False
     st.session_state.masiva_guardado_ok = False
     st.session_state.masiva_upload_id = ""
+    st.session_state.masiva_registros_excluidos = {}
+    limpiar_estado_editor_masivo()
 else:
     try:
         upload_size = getattr(uploaded_file, "size", None) or len(uploaded_file.getvalue())
@@ -1152,6 +1171,8 @@ else:
         st.session_state.guardando_masiva = False
         st.session_state.guardar_masiva_pendiente = False
         st.session_state.masiva_guardado_ok = False
+        st.session_state.masiva_registros_excluidos = {}
+        limpiar_estado_editor_masivo()
 
 filas = []
 errores_totales = []
@@ -1171,7 +1192,7 @@ if uploaded_file is not None:
             st.success(f"Archivo leído correctamente. Registros detectados: {len(df_editor_base)}")
             st.info(
                 "Completa los campos de clasificación por cada fila. El campo Momento Viaje se calcula automáticamente a partir de FECHA INICIO, FECHA DE FINALIZACIÓN y FECHA. "
-                "Puedes copiar y pegar valores en bloque desde Excel para acelerar la carga."
+                "El comentario es editable: puedes eliminar textos irrelevantes, depurar datos protegidos o excluir registros completos antes de guardar."
             )
 
             columnas_visibles = [
@@ -1259,7 +1280,32 @@ if uploaded_file is not None:
                             True
                         )
                     with c_base6:
-                        st.text_area("Comentario", value=comentario_row, disabled=True, key=f"masiva_com_{idx_masiva}", height=90)
+                        comentario_key = f"masiva_com_{idx_masiva}"
+                        if comentario_key not in st.session_state:
+                            st.session_state[comentario_key] = comentario_row
+
+                        c_com1, c_com2 = st.columns([4, 1])
+                        with c_com1:
+                            comentario_editado = st.text_area(
+                                "Comentario editable",
+                                key=comentario_key,
+                                height=110,
+                                help="Puedes modificar, resumir o eliminar información sensible antes de guardar.",
+                            )
+                        with c_com2:
+                            st.write("")
+                            st.write("")
+                            if st.button("🧹 Limpiar", key=f"masiva_limpiar_com_{idx_masiva}"):
+                                st.session_state[comentario_key] = ""
+                                st.rerun()
+
+                    excluir_registro = st.checkbox(
+                        "Excluir este registro de la carga",
+                        key=f"masiva_excluir_{idx_masiva}",
+                        help="Úsalo cuando la fila no deba guardarse en Google Sheets."
+                    )
+                    if excluir_registro:
+                        st.info("Este registro quedará fuera de la carga masiva.")
 
                     c1, c2, c3, c4 = st.columns(4)
                     with c1:
@@ -1406,6 +1452,9 @@ if uploaded_file is not None:
                         elif area_relacionada == "Guías/Guides":
                             guia = _selectbox_masiva("Nombre del Guía", [""] + GUIAS, row.get("guia", ""), f"masiva_guia_qs_{idx_masiva}", True)
 
+                    if excluir_registro:
+                        continue
+
                     edited_records.append({
                         "fecha_inicio": row.get("fecha_inicio", ""),
                         "fecha_registro": row.get("fecha_registro", ""),
@@ -1424,7 +1473,7 @@ if uploaded_file is not None:
                         "trayecto": trayecto,
                         "guia": guia,
                         "tipo_incidencia": tipo_incidencia,
-                        "comentario": comentario_row,
+                        "comentario": limpiar_valor_masivo(comentario_editado),
                         "resolucion": resolucion,
                         "monto": monto,
                         "resultado": resultado,
