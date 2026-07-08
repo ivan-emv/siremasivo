@@ -1,1 +1,9 @@
-
+streamlit
+pandas
+gspread
+oauth2client
+gspread-dataframe
+openpyxl
+xlrd
+lxml
+html5lib
