@@ -1224,7 +1224,7 @@ if uploaded_file is not None:
             st.success(f"Archivo leído correctamente. Registros detectados: {len(df_editor_base)}")
             st.info(
                 "Completa los campos de clasificación por cada fila. El campo Momento Viaje se calcula automáticamente a partir de FECHA INICIO, FECHA DE FINALIZACIÓN y FECHA. "
-                "El comentario es editable: puedes eliminar textos irrelevantes, depurar datos protegidos o borrar registros completos de la revisión antes de guardar."
+                "El comentario es editable: puedes eliminar textos irrelevantes, depurar datos protegidos o borrar registros completos de la revisión antes de guardar. El semáforo del encabezado indica si el registro está completo."
             )
 
             columnas_visibles = [
@@ -1262,10 +1262,8 @@ if uploaded_file is not None:
                 return bool(limpiar_valor_masivo(valor)) and limpiar_valor_masivo(valor) != "SELECCIONE"
 
             def _label_estado(label, valor, required=False):
-                """Añade semáforo visual al label del campo obligatorio."""
-                if not required:
-                    return label
-                return f"🟢 {label}" if _campo_completo(valor) else f"🟡 {label}"
+                """Mantiene el label limpio. El semáforo se muestra solo en el encabezado del registro."""
+                return label
 
             def _selectbox_masiva(label, options, default_value, key, required=False):
                 opciones = list(options or [""])
@@ -1291,6 +1289,108 @@ if uploaded_file is not None:
                 label_render = _label_estado(label, st.session_state.get(key, ""), required)
                 return st.text_area(label_render, key=key, max_chars=max_chars)
 
+            def _valor_estado_masiva(idx, row, key_suffix, default_value=""):
+                """Lee el valor vigente desde session_state o, si aún no existe el widget, desde la fila base."""
+                key = f"masiva_{key_suffix}_{idx}"
+                if key in st.session_state:
+                    return limpiar_valor_masivo(st.session_state.get(key, ""))
+                return limpiar_valor_masivo(default_value)
+
+            def _pendientes_registro_masiva(idx, row):
+                """Calcula pendientes del registro para mostrar un único semáforo en el encabezado."""
+                pendientes = []
+
+                operador = _valor_estado_masiva(idx, row, "op", row.get("operador", ""))
+                momento = _valor_estado_masiva(idx, row, "momento", row.get("momento_viaje", ""))
+                medio = _valor_estado_masiva(idx, row, "medio", row.get("medio_contacto", ""))
+                quien = _valor_estado_masiva(idx, row, "quien", row.get("quien_contacta", ""))
+                ciudad_v = _valor_estado_masiva(idx, row, "ciudad", row.get("ciudad", ""))
+                tipo_contacto_v = _valor_estado_masiva(idx, row, "tipo_contacto", row.get("tipo_contacto", "Reclamación/Complaint"))
+
+                comentario_key = f"masiva_com_{idx}"
+                comentario_v = limpiar_valor_masivo(
+                    st.session_state.get(comentario_key, row.get("comentario", ""))
+                )
+
+                for nombre_campo, valor_campo in {
+                    "Operador": operador,
+                    "Momento Viaje": momento,
+                    "Medio de Contacto": medio,
+                    "Quién Contacta": quien,
+                    "Ciudad": ciudad_v,
+                    "Tipo de Contacto": tipo_contacto_v,
+                    "Comentario": comentario_v,
+                }.items():
+                    if not _campo_completo(valor_campo):
+                        pendientes.append(nombre_campo)
+
+                resolucion_v = ""
+                monto_v = ""
+
+                if tipo_contacto_v == "Información/Information":
+                    area_v = _valor_estado_masiva(idx, row, "area_info", row.get("area", ""))
+                    resolucion_v = _valor_estado_masiva(idx, row, "resolucion_info", row.get("resolucion", ""))
+                    if not _campo_completo(area_v): pendientes.append("Área Relacionada")
+                    if not _campo_completo(resolucion_v): pendientes.append("Resolución")
+                    if area_v == "Hotel":
+                        hotel_v = _valor_estado_masiva(idx, row, "hotel_info", row.get("hotel", ""))
+                        if not _campo_completo(hotel_v): pendientes.append("Hotel")
+                    if area_v == "Traslados/Transfers":
+                        tipo_traslado_v = _valor_estado_masiva(idx, row, "tipo_traslado_info", row.get("tipo_traslado", ""))
+                        if not _campo_completo(tipo_traslado_v): pendientes.append("Tipo de Traslado")
+                    monto_v = _valor_estado_masiva(idx, row, "monto_info", row.get("monto", ""))
+
+                elif tipo_contacto_v == "Reclamación/Complaint":
+                    area_rel_v = _valor_estado_masiva(idx, row, "area_reclamo", row.get("area_relacionada", ""))
+                    tipo_inc_v = _valor_estado_masiva(idx, row, "tipo_incidencia_reclamo", row.get("tipo_incidencia", ""))
+                    resolucion_v = _valor_estado_masiva(idx, row, "resolucion_reclamo", row.get("resolucion", ""))
+                    resultado_v = _valor_estado_masiva(idx, row, "resultado_reclamo", row.get("resultado", ""))
+                    if not _campo_completo(area_rel_v): pendientes.append("Área Relacionada")
+                    if not _campo_completo(tipo_inc_v): pendientes.append("Tipo de Incidencia")
+                    if not _campo_completo(resolucion_v): pendientes.append("Resolución")
+                    if not _campo_completo(resultado_v): pendientes.append("Resultado")
+                    if area_rel_v == "Hotel":
+                        hotel_v = _valor_estado_masiva(idx, row, "hotel_reclamo", row.get("hotel", ""))
+                        if not _campo_completo(hotel_v): pendientes.append("Hotel")
+                    if area_rel_v == "Guías/Guides":
+                        trayecto_v = _valor_estado_masiva(idx, row, "trayecto_guia", row.get("trayecto", ""))
+                        guia_v = _valor_estado_masiva(idx, row, "guia_reclamo", row.get("guia", ""))
+                        if not _campo_completo(trayecto_v): pendientes.append("Trayecto")
+                        if not _campo_completo(guia_v): pendientes.append("Guía")
+                    if area_rel_v == "Traslados/Transfers":
+                        if tipo_inc_v.startswith("TRF"):
+                            tipo_traslado_v = _valor_estado_masiva(idx, row, "tipo_traslado_reclamo", row.get("tipo_traslado", ""))
+                            if not _campo_completo(tipo_traslado_v): pendientes.append("Tipo de Traslado")
+                        if tipo_inc_v.startswith("BUS"):
+                            trayecto_v = _valor_estado_masiva(idx, row, "trayecto_bus", row.get("trayecto", ""))
+                            if not _campo_completo(trayecto_v): pendientes.append("Trayecto")
+                    if area_rel_v == "Generales/General" and tipo_inc_v.startswith("Itinerario"):
+                        trayecto_v = _valor_estado_masiva(idx, row, "trayecto_general", row.get("trayecto", ""))
+                        if not _campo_completo(trayecto_v): pendientes.append("Trayecto")
+                    monto_v = _valor_estado_masiva(idx, row, "monto_reclamo", row.get("monto", ""))
+
+                elif tipo_contacto_v == "Otro/Other":
+                    resolucion_v = _valor_estado_masiva(idx, row, "resolucion_otro", row.get("resolucion", ""))
+                    if not _campo_completo(resolucion_v): pendientes.append("Resolución")
+                    monto_v = _valor_estado_masiva(idx, row, "monto_otro", row.get("monto", ""))
+
+                elif tipo_contacto_v == "Cuestionario de Satisfacción":
+                    area_rel_v = _valor_estado_masiva(idx, row, "area_qs", row.get("area_relacionada", ""))
+                    tipo_inc_v = _valor_estado_masiva(idx, row, "tipo_incidencia_qs", row.get("tipo_incidencia", ""))
+                    if not _campo_completo(area_rel_v): pendientes.append("Área Relacionada")
+                    if not _campo_completo(tipo_inc_v): pendientes.append("Tipo de Incidencia")
+                    if area_rel_v == "Hotel":
+                        hotel_v = _valor_estado_masiva(idx, row, "hotel_qs", row.get("hotel", ""))
+                        if not _campo_completo(hotel_v): pendientes.append("Hotel")
+                    if area_rel_v == "Guías/Guides":
+                        guia_v = _valor_estado_masiva(idx, row, "guia_qs", row.get("guia", ""))
+                        if not _campo_completo(guia_v): pendientes.append("Guía")
+
+                if resolucion_v.startswith("Reembolso") or resolucion_v == "Compensación/Compensation":
+                    if not _campo_completo(monto_v): pendientes.append("Monto")
+
+                return pendientes
+
             for idx_masiva, row in df_editor_base.reset_index(drop=True).iterrows():
                 eliminado_key = f"{st.session_state.get('masiva_upload_id', '')}_{idx_masiva}"
                 if st.session_state.get("masiva_registros_eliminados", {}).get(eliminado_key):
@@ -1298,7 +1398,11 @@ if uploaded_file is not None:
 
                 loc_row = limpiar_valor_masivo(row.get("localizador", ""))
                 comentario_row = limpiar_valor_masivo(row.get("comentario", ""))
-                titulo_expander = f"{idx_masiva + 1}. {loc_row}"
+                pendientes_header = _pendientes_registro_masiva(idx_masiva, row)
+                if pendientes_header:
+                    titulo_expander = f"🟡 {idx_masiva + 1}. {loc_row} ({len(pendientes_header)})"
+                else:
+                    titulo_expander = f"🟢 {idx_masiva + 1}. {loc_row}"
 
                 with st.expander(titulo_expander, expanded=(idx_masiva < 3)):
                     url_reserva_masiva = (
@@ -1514,58 +1618,6 @@ if uploaded_file is not None:
                             hotel = _selectbox_masiva("Hotel", [""] + hoteles_ciudad, row.get("hotel", ""), f"masiva_hotel_qs_{idx_masiva}", True)
                         elif area_relacionada == "Guías/Guides":
                             guia = _selectbox_masiva("Nombre del Guía", [""] + GUIAS, row.get("guia", ""), f"masiva_guia_qs_{idx_masiva}", True)
-
-                    # Resumen visual del estado del registro activo. Sustituye el bloque global de validaciones
-                    # y evita mostrar avisos de registros que ya fueron eliminados de la revisión.
-                    campos_base_pendientes = []
-                    for nombre_campo, valor_campo in {
-                        "Momento Viaje": momento_viaje,
-                        "Medio de Contacto": medio_contacto,
-                        "Quién Contacta": quien_contacta,
-                        "Ciudad": ciudad,
-                        "Tipo de Contacto": tipo_contacto,
-                        "Comentario": comentario_editado,
-                    }.items():
-                        if not _campo_completo(valor_campo):
-                            campos_base_pendientes.append(nombre_campo)
-
-                    if tipo_contacto == "Información/Information":
-                        if not _campo_completo(area): campos_base_pendientes.append("Área Relacionada")
-                        if not _campo_completo(resolucion): campos_base_pendientes.append("Resolución")
-                        if area == "Hotel" and not _campo_completo(hotel): campos_base_pendientes.append("Hotel")
-                        if area == "Traslados/Transfers" and not _campo_completo(tipo_traslado): campos_base_pendientes.append("Tipo de Traslado")
-                    elif tipo_contacto == "Reclamación/Complaint":
-                        if not _campo_completo(area_relacionada): campos_base_pendientes.append("Área Relacionada")
-                        if not _campo_completo(tipo_incidencia): campos_base_pendientes.append("Tipo de Incidencia")
-                        if not _campo_completo(resolucion): campos_base_pendientes.append("Resolución")
-                        if not _campo_completo(resultado): campos_base_pendientes.append("Resultado")
-                        if area_relacionada == "Hotel" and not _campo_completo(hotel): campos_base_pendientes.append("Hotel")
-                        if area_relacionada == "Guías/Guides":
-                            if not _campo_completo(trayecto): campos_base_pendientes.append("Trayecto")
-                            if not _campo_completo(guia): campos_base_pendientes.append("Guía")
-                        if area_relacionada == "Traslados/Transfers":
-                            if tipo_incidencia.startswith("TRF") and not _campo_completo(tipo_traslado): campos_base_pendientes.append("Tipo de Traslado")
-                            if tipo_incidencia.startswith("BUS") and not _campo_completo(trayecto): campos_base_pendientes.append("Trayecto")
-                        if area_relacionada == "Generales/General" and tipo_incidencia.startswith("Itinerario") and not _campo_completo(trayecto):
-                            campos_base_pendientes.append("Trayecto")
-                    elif tipo_contacto == "Otro/Other":
-                        if not _campo_completo(resolucion): campos_base_pendientes.append("Resolución")
-                    elif tipo_contacto == "Cuestionario de Satisfacción":
-                        if not _campo_completo(area_relacionada): campos_base_pendientes.append("Área Relacionada")
-                        if not _campo_completo(tipo_incidencia): campos_base_pendientes.append("Tipo de Incidencia")
-                        if area_relacionada == "Hotel" and not _campo_completo(hotel): campos_base_pendientes.append("Hotel")
-                        if area_relacionada == "Guías/Guides" and not _campo_completo(guia): campos_base_pendientes.append("Guía")
-
-                    if resolucion.startswith("Reembolso") or resolucion == "Compensación/Compensation":
-                        if not _campo_completo(monto): campos_base_pendientes.append("Monto")
-
-                    if campos_base_pendientes:
-                        st.markdown(
-                            f"<span class='status-pending'>🟡 Pendiente: {', '.join(campos_base_pendientes)}</span>",
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        st.markdown("<span class='status-ok'>🟢 Registro completo</span>", unsafe_allow_html=True)
 
                     edited_records.append({
                         "fecha_inicio": row.get("fecha_inicio", ""),
