@@ -1187,7 +1187,13 @@ if uploaded_file is not None:
         usuario_final = "" if nombre_usuario == "SELECCIONE" else nombre_usuario
         df_editor_base, errores_archivo = preparar_editor_retrasos_desde_df(df_retrasos, usuario_final, OPERADORES)
 
-        if errores_archivo:
+        # No volcamos aquí los errores por fila del archivo original.
+        # Motivo: el usuario puede eliminar visualmente registros antes de guardar;
+        # si agregamos estos errores en este punto, seguirían bloqueando el guardado
+        # aunque la fila ya no forme parte de la revisión activa.
+        # Las validaciones definitivas se ejecutan más abajo únicamente sobre
+        # edited_records, es decir, sobre los registros que continúan visibles.
+        if errores_archivo and df_editor_base.empty:
             errores_totales.extend(errores_archivo)
 
         if df_editor_base.empty:
