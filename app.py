@@ -1494,4 +1494,3 @@ if st.session_state.get("guardar_masiva_pendiente", False):
     except Exception as e:
         st.session_state.guardando_masiva = False
         st.error(f"❌ Error al guardar la carga masiva: {e}")
-
