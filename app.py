@@ -101,6 +101,8 @@ def init_session():
         st.session_state.masiva_upload_id = ""
     if "masiva_registros_excluidos" not in st.session_state:
         st.session_state.masiva_registros_excluidos = {}
+    if "masiva_registros_eliminados" not in st.session_state:
+        st.session_state.masiva_registros_eliminados = {}
 
 
 def get_gspread_client():
@@ -1141,7 +1143,7 @@ uploaded_file = st.file_uploader(
 def limpiar_estado_editor_masivo():
     """Limpia valores editables por fila cuando se cambia o retira el archivo cargado."""
     prefijos = (
-        "masiva_com_", "masiva_excluir_", "masiva_limpiar_com_",
+        "masiva_com_", "masiva_eliminar_", "masiva_limpiar_com_",
         "masiva_op_", "masiva_momento_", "masiva_medio_", "masiva_quien_",
         "masiva_ciudad_", "masiva_tipo_contacto_", "masiva_area_",
         "masiva_tipo_incidencia_", "masiva_resolucion_", "masiva_resultado_",
@@ -1159,6 +1161,7 @@ if uploaded_file is None:
     st.session_state.masiva_guardado_ok = False
     st.session_state.masiva_upload_id = ""
     st.session_state.masiva_registros_excluidos = {}
+    st.session_state.masiva_registros_eliminados = {}
     limpiar_estado_editor_masivo()
 else:
     try:
@@ -1172,6 +1175,7 @@ else:
         st.session_state.guardar_masiva_pendiente = False
         st.session_state.masiva_guardado_ok = False
         st.session_state.masiva_registros_excluidos = {}
+        st.session_state.masiva_registros_eliminados = {}
         limpiar_estado_editor_masivo()
 
 filas = []
@@ -1192,7 +1196,7 @@ if uploaded_file is not None:
             st.success(f"Archivo leído correctamente. Registros detectados: {len(df_editor_base)}")
             st.info(
                 "Completa los campos de clasificación por cada fila. El campo Momento Viaje se calcula automáticamente a partir de FECHA INICIO, FECHA DE FINALIZACIÓN y FECHA. "
-                "El comentario es editable: puedes eliminar textos irrelevantes, depurar datos protegidos o excluir registros completos antes de guardar."
+                "El comentario es editable: puedes eliminar textos irrelevantes, depurar datos protegidos o borrar registros completos de la revisión antes de guardar."
             )
 
             columnas_visibles = [
@@ -1238,6 +1242,10 @@ if uploaded_file is not None:
                 return st.selectbox(label, opciones, key=key)
 
             for idx_masiva, row in df_editor_base.reset_index(drop=True).iterrows():
+                eliminado_key = f"{st.session_state.get('masiva_upload_id', '')}_{idx_masiva}"
+                if st.session_state.get("masiva_registros_eliminados", {}).get(eliminado_key):
+                    continue
+
                 loc_row = limpiar_valor_masivo(row.get("localizador", ""))
                 comentario_row = limpiar_valor_masivo(row.get("comentario", ""))
                 titulo_expander = f"{idx_masiva + 1}. {loc_row}"
@@ -1247,12 +1255,25 @@ if uploaded_file is not None:
                         "https://www.europamundo-online.com/reservas/"
                         f"buscarreserva2.asp?coreserva={loc_row}"
                     )
-                    st.link_button(
-                        "🔎 Ver Reserva",
-                        url_reserva_masiva,
-                        use_container_width=False,
-                        disabled=not bool(loc_row),
-                    )
+                    c_accion1, c_accion2, c_accion3 = st.columns([1, 1, 5])
+                    with c_accion1:
+                        st.link_button(
+                            "🔎 Ver Reserva",
+                            url_reserva_masiva,
+                            use_container_width=True,
+                            disabled=not bool(loc_row),
+                        )
+                    with c_accion2:
+                        if st.button(
+                            "🗑️ Eliminar registro",
+                            key=f"masiva_eliminar_{idx_masiva}",
+                            use_container_width=True,
+                            help="Quita este registro de la revisión actual. No se guardará en Google Sheets.",
+                        ):
+                            st.session_state.setdefault("masiva_registros_eliminados", {})[eliminado_key] = True
+                            limpiar_estado_editor_masivo()
+                            st.rerun()
+
 
                     c_base1, c_base2, c_base3, c_base4 = st.columns(4)
                     with c_base1:
@@ -1298,14 +1319,6 @@ if uploaded_file is not None:
                             if st.button("🧹 Limpiar", key=f"masiva_limpiar_com_{idx_masiva}"):
                                 st.session_state[comentario_key] = ""
                                 st.rerun()
-
-                    excluir_registro = st.checkbox(
-                        "Excluir este registro de la carga",
-                        key=f"masiva_excluir_{idx_masiva}",
-                        help="Úsalo cuando la fila no deba guardarse en Google Sheets."
-                    )
-                    if excluir_registro:
-                        st.info("Este registro quedará fuera de la carga masiva.")
 
                     c1, c2, c3, c4 = st.columns(4)
                     with c1:
@@ -1451,9 +1464,6 @@ if uploaded_file is not None:
                             hotel = _selectbox_masiva("Hotel", [""] + hoteles_ciudad, row.get("hotel", ""), f"masiva_hotel_qs_{idx_masiva}", True)
                         elif area_relacionada == "Guías/Guides":
                             guia = _selectbox_masiva("Nombre del Guía", [""] + GUIAS, row.get("guia", ""), f"masiva_guia_qs_{idx_masiva}", True)
-
-                    if excluir_registro:
-                        continue
 
                     edited_records.append({
                         "fecha_inicio": row.get("fecha_inicio", ""),
