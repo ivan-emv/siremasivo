@@ -1400,7 +1400,7 @@ if uploaded_file is not None:
                 comentario_row = limpiar_valor_masivo(row.get("comentario", ""))
                 pendientes_header = _pendientes_registro_masiva(idx_masiva, row)
                 if pendientes_header:
-                    titulo_expander = f"🟡 {idx_masiva + 1}. {loc_row} ({len(pendientes_header)})"
+                    titulo_expander = f"🟡 {idx_masiva + 1}. {loc_row}"
                 else:
                     titulo_expander = f"🟢 {idx_masiva + 1}. {loc_row}"
 
