@@ -4,9 +4,14 @@
 # Mantiene únicamente el módulo de carga masiva y un Admin mínimo
 # para refrescar catálogos/cache.
 # =========================================================
+import faulthandler
+faulthandler.enable()
+
+print('[BOOT 01] Iniciando importaciones de la app', flush=True)
 import streamlit as st
 import datetime
 import re
+print('[BOOT 02] Importaciones básicas completadas', flush=True)
 
 # =========================================================
 # CONFIGURACIÓN DE GOOGLE SHEETS
@@ -106,17 +111,27 @@ def init_session():
 
 
 def get_gspread_client():
-    """Crea cliente gspread usando el service account definido en secrets.toml."""
+    """Crea un cliente gspread mediante google-auth y el service account de secrets.toml."""
+    print("[BOOT/API] Preparando cliente de Google Sheets", flush=True)
     import gspread
-    from oauth2client.service_account import ServiceAccountCredentials
+    from google.oauth2.service_account import Credentials
 
-    scope = [
-        "https://spreadsheets.google.com/feeds",
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
-    creds_dict = st.secrets["gcp_service_account"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    return gspread.authorize(creds)
+
+    if "gcp_service_account" not in st.secrets:
+        raise RuntimeError(
+            "No se encontró la sección [gcp_service_account] en los Secrets de Streamlit."
+        )
+
+    credentials_info = dict(st.secrets["gcp_service_account"])
+    credentials = Credentials.from_service_account_info(
+        credentials_info,
+        scopes=scopes,
+    )
+    return gspread.authorize(credentials)
 
 
 def get_all_records_safe(worksheet, expected_headers=None):
@@ -558,7 +573,6 @@ def preparar_editor_retrasos_desde_df(df, nombre_usuario: str, operadores_catalo
             "operador_xls": operador_xls,
             "operador": operador,
             "comentario": comentario,
-            "momento_viaje": momento_viaje_auto,
             "medio_contacto": "",
             "quien_contacta": "",
             "ciudad": "",
@@ -770,75 +784,6 @@ def obtener_targets_multi_localizador(idx: int, principal_loc: str):
     if not show:
         return targets, errores
 
-    try:
-        count = int(st.session_state.get(f"ml_count_{idx}", 0) or 0)
-    except Exception:
-        count = 0
-
-    if count <= 0:
-        return targets, errores
-
-    principal = (principal_loc or "").strip().upper()
-    vistos = set([principal]) if principal else set()
-
-    for i in range(count):
-        loc_key = f"ml_loc_{idx}_{i}"
-        op_key = f"ml_op_{idx}_{i}"
-        fecha_key = f"ml_fecha_{idx}_{i}"
-
-        loc = (st.session_state.get(loc_key, "") or "").strip().upper()
-        op = (st.session_state.get(op_key, "") or "").strip()
-        fecha = fecha_a_texto_ddmmaaaa(st.session_state.get(fecha_key, ""))
-        if not loc:
-            errores.append(f"Falta completar el Localizador adicional #{i+1}.")
-            continue
-        if loc in vistos:
-            errores.append(f"El Localizador '{loc}' está duplicado (principal o repetido).")
-            continue
-        vistos.add(loc)
-
-        if not op or op == "SELECCIONE":
-            errores.append(f"Falta seleccionar el Operador para el Localizador '{loc}'.")
-            continue
-
-        if not re.match(r"^\d{2}/\d{2}/\d{4}$", fecha or ""):
-            errores.append(f"Falta completar la Fecha de Inicio (DD/MM/YYYY) para el Localizador '{loc}'.")
-            continue
-
-        targets.append({"localizador": loc, "operador": op, "fecha_inicio": fecha})
-
-    return targets, errores
-
-    try:
-        count = int(st.session_state.get(f"ml_count_{idx}", 0) or 0)
-    except Exception:
-        count = 0
-
-    if count <= 0:
-        return targets, errores
-
-    principal = (principal_loc or "").strip().upper()
-    vistos = set([principal]) if principal else set()
-
-    for i in range(count):
-        loc = (st.session_state.get(f"ml_loc_{idx}_{i}", "") or "").strip().upper()
-        op = (st.session_state.get(f"ml_op_{idx}_{i}", "") or "").strip()
-
-        if not loc:
-            errores.append(f"Falta completar el Localizador adicional #{i+1}.")
-            continue
-        if loc in vistos:
-            errores.append(f"El Localizador '{loc}' está duplicado (principal o repetido).")
-            continue
-        vistos.add(loc)
-
-        if not op or op == "SELECCIONE":
-            errores.append(f"Falta seleccionar el Operador para el Localizador '{loc}'.")
-            continue
-
-        targets.append({"localizador": loc, "operador": op})
-
-    return targets, errores
 # =========================================================
 # PERSISTENCIA (GUARDADO EN GOOGLE SHEETS)
 # =========================================================
@@ -1007,8 +952,11 @@ def guardar_en_google_sheets_seguro(datos_generales: dict, lista_incidencias: li
 # =========================================================
 # INICIO APP INDEPENDIENTE
 # =========================================================
+print("[BOOT 03] Inicializando session_state", flush=True)
 init_session()
+print("[BOOT 04] Configurando página Streamlit", flush=True)
 st.set_page_config(page_title="Carga Masiva Retrasos - EMV SIRE", layout="wide")
+print("[BOOT 05] Configuración de página completada", flush=True)
 
 hide_streamlit_style = """
     <style>
@@ -1140,7 +1088,15 @@ def cargar_catalogos_masiva():
         datos[nombre] = worksheet.get_all_records()
     return datos
 
-datos_bd_masiva = cargar_catalogos_masiva()
+print("[BOOT 06] Iniciando carga de catálogos", flush=True)
+try:
+    datos_bd_masiva = cargar_catalogos_masiva()
+except Exception as exc:
+    print(f"[BOOT ERROR] Falló la carga de catálogos: {type(exc).__name__}: {exc}", flush=True)
+    st.error("No se pudieron cargar los catálogos desde Google Sheets.")
+    st.exception(exc)
+    st.stop()
+print("[BOOT 07] Catálogos cargados correctamente", flush=True)
 
 USUARIOS = [u.get("Nombre") for u in datos_bd_masiva.get("Usuarios", []) if u.get("Nombre")]
 CIUDADES = [c.get("Ciudad") for c in datos_bd_masiva.get("Ciudades", []) if c.get("Ciudad")]
@@ -1175,6 +1131,24 @@ def limpiar_estado_editor_masivo():
     for key in list(st.session_state.keys()):
         if str(key).startswith(prefijos):
             del st.session_state[key]
+
+def limpiar_estado_registro_masivo(idx: int):
+    """Elimina del session_state únicamente los widgets correspondientes a una fila."""
+    sufijo = f"_{idx}"
+    prefijos = (
+        "masiva_com_", "masiva_eliminar_", "masiva_limpiar_com_",
+        "masiva_op_", "masiva_momento_", "masiva_medio_", "masiva_quien_",
+        "masiva_ciudad_", "masiva_tipo_contacto_", "masiva_area_",
+        "masiva_tipo_incidencia_", "masiva_resolucion_", "masiva_resultado_",
+        "masiva_monto_", "masiva_hotel_", "masiva_trayecto_",
+        "masiva_guia_", "masiva_tipo_traslado_", "masiva_fi_", "masiva_ff_",
+        "masiva_fr_", "masiva_loc_",
+    )
+    for key in list(st.session_state.keys()):
+        key_text = str(key)
+        if key_text.startswith(prefijos) and key_text.endswith(sufijo):
+            del st.session_state[key]
+
 
 # Reset del bloqueo cuando no hay archivo o cuando el usuario carga un archivo diferente.
 if uploaded_file is None:
@@ -1425,7 +1399,7 @@ if uploaded_file is not None:
                             help="Quita este registro de la revisión actual. No se guardará en Google Sheets.",
                         ):
                             st.session_state.setdefault("masiva_registros_eliminados", {})[eliminado_key] = True
-                            limpiar_estado_editor_masivo()
+                            limpiar_estado_registro_masivo(idx_masiva)
                             st.rerun()
 
 
@@ -1706,3 +1680,5 @@ if st.session_state.get("guardar_masiva_pendiente", False):
     except Exception as e:
         st.session_state.guardando_masiva = False
         st.error(f"❌ Error al guardar la carga masiva: {e}")
+
+print("[BOOT 08] Ejecución del script completada", flush=True)
