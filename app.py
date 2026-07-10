@@ -96,8 +96,13 @@ def init_session():
         st.session_state.guardar_masiva_pendiente = False
     if "masiva_guardado_ok" not in st.session_state:
         st.session_state.masiva_guardado_ok = False
+        st.session_state.masiva_registros_excluidos = {}
     if "masiva_upload_id" not in st.session_state:
         st.session_state.masiva_upload_id = ""
+    if "masiva_registros_excluidos" not in st.session_state:
+        st.session_state.masiva_registros_excluidos = {}
+    if "masiva_registros_eliminados" not in st.session_state:
+        st.session_state.masiva_registros_eliminados = {}
 
 
 def get_gspread_client():
@@ -1014,6 +1019,28 @@ hide_streamlit_style = """
     </style>
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+
+
+st.markdown("""
+<style>
+.status-ok {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    background: rgba(39, 174, 96, 0.14);
+    border: 1px solid rgba(39, 174, 96, 0.45);
+    font-size: 0.85rem;
+}
+.status-pending {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    background: rgba(241, 196, 15, 0.14);
+    border: 1px solid rgba(241, 196, 15, 0.45);
+    font-size: 0.85rem;
+}
+</style>
+""", unsafe_allow_html=True)
 # =========================================================
 # HERRAMIENTAS RÁPIDAS (SIEMPRE DISPONIBLES EN BARRA LATERAL)
 # =========================================================
@@ -1135,12 +1162,29 @@ uploaded_file = st.file_uploader(
     key="upload_retrasos_masivo"
 )
 
+def limpiar_estado_editor_masivo():
+    """Limpia valores editables por fila cuando se cambia o retira el archivo cargado."""
+    prefijos = (
+        "masiva_com_", "masiva_eliminar_", "masiva_limpiar_com_",
+        "masiva_op_", "masiva_momento_", "masiva_medio_", "masiva_quien_",
+        "masiva_ciudad_", "masiva_tipo_contacto_", "masiva_area_",
+        "masiva_tipo_incidencia_", "masiva_resolucion_", "masiva_resultado_",
+        "masiva_monto_", "masiva_hotel_", "masiva_trayecto_",
+        "masiva_guia_", "masiva_tipo_traslado_",
+    )
+    for key in list(st.session_state.keys()):
+        if str(key).startswith(prefijos):
+            del st.session_state[key]
+
 # Reset del bloqueo cuando no hay archivo o cuando el usuario carga un archivo diferente.
 if uploaded_file is None:
     st.session_state.guardando_masiva = False
     st.session_state.guardar_masiva_pendiente = False
     st.session_state.masiva_guardado_ok = False
     st.session_state.masiva_upload_id = ""
+    st.session_state.masiva_registros_excluidos = {}
+    st.session_state.masiva_registros_eliminados = {}
+    limpiar_estado_editor_masivo()
 else:
     try:
         upload_size = getattr(uploaded_file, "size", None) or len(uploaded_file.getvalue())
@@ -1152,6 +1196,9 @@ else:
         st.session_state.guardando_masiva = False
         st.session_state.guardar_masiva_pendiente = False
         st.session_state.masiva_guardado_ok = False
+        st.session_state.masiva_registros_excluidos = {}
+        st.session_state.masiva_registros_eliminados = {}
+        limpiar_estado_editor_masivo()
 
 filas = []
 errores_totales = []
@@ -1162,7 +1209,13 @@ if uploaded_file is not None:
         usuario_final = "" if nombre_usuario == "SELECCIONE" else nombre_usuario
         df_editor_base, errores_archivo = preparar_editor_retrasos_desde_df(df_retrasos, usuario_final, OPERADORES)
 
-        if errores_archivo:
+        # No volcamos aquí los errores por fila del archivo original.
+        # Motivo: el usuario puede eliminar visualmente registros antes de guardar;
+        # si agregamos estos errores en este punto, seguirían bloqueando el guardado
+        # aunque la fila ya no forme parte de la revisión activa.
+        # Las validaciones definitivas se ejecutan más abajo únicamente sobre
+        # edited_records, es decir, sobre los registros que continúan visibles.
+        if errores_archivo and df_editor_base.empty:
             errores_totales.extend(errores_archivo)
 
         if df_editor_base.empty:
@@ -1171,7 +1224,7 @@ if uploaded_file is not None:
             st.success(f"Archivo leído correctamente. Registros detectados: {len(df_editor_base)}")
             st.info(
                 "Completa los campos de clasificación por cada fila. El campo Momento Viaje se calcula automáticamente a partir de FECHA INICIO, FECHA DE FINALIZACIÓN y FECHA. "
-                "Puedes copiar y pegar valores en bloque desde Excel para acelerar la carga."
+                "El comentario es editable: puedes eliminar textos irrelevantes, depurar datos protegidos o borrar registros completos de la revisión antes de guardar. El semáforo del encabezado indica si el registro está completo."
             )
 
             columnas_visibles = [
@@ -1205,6 +1258,13 @@ if uploaded_file is not None:
             # Para filtrar Tipo de Incidencia según Área/Área Relacionada, usamos selectboxes por registro.
             edited_records = []
 
+            def _campo_completo(valor):
+                return bool(limpiar_valor_masivo(valor)) and limpiar_valor_masivo(valor) != "SELECCIONE"
+
+            def _label_estado(label, valor, required=False):
+                """Mantiene el label limpio. El semáforo se muestra solo en el encabezado del registro."""
+                return label
+
             def _selectbox_masiva(label, options, default_value, key, required=False):
                 opciones = list(options or [""])
                 if "" not in opciones:
@@ -1214,24 +1274,160 @@ if uploaded_file is not None:
                     st.session_state[key] = default_value if default_value in opciones else ""
                 elif st.session_state.get(key) not in opciones:
                     st.session_state[key] = ""
-                return st.selectbox(label, opciones, key=key)
+                label_render = _label_estado(label, st.session_state.get(key, ""), required)
+                return st.selectbox(label_render, opciones, key=key)
+
+            def _text_input_masiva(label, default_value, key, required=False):
+                if key not in st.session_state:
+                    st.session_state[key] = limpiar_valor_masivo(default_value)
+                label_render = _label_estado(label, st.session_state.get(key, ""), required)
+                return st.text_input(label_render, key=key)
+
+            def _text_area_masiva(label, default_value, key, required=False, max_chars=500):
+                if key not in st.session_state:
+                    st.session_state[key] = limpiar_valor_masivo(default_value)
+                label_render = _label_estado(label, st.session_state.get(key, ""), required)
+                return st.text_area(label_render, key=key, max_chars=max_chars)
+
+            def _valor_estado_masiva(idx, row, key_suffix, default_value=""):
+                """Lee el valor vigente desde session_state o, si aún no existe el widget, desde la fila base."""
+                key = f"masiva_{key_suffix}_{idx}"
+                if key in st.session_state:
+                    return limpiar_valor_masivo(st.session_state.get(key, ""))
+                return limpiar_valor_masivo(default_value)
+
+            def _pendientes_registro_masiva(idx, row):
+                """Calcula pendientes del registro para mostrar un único semáforo en el encabezado."""
+                pendientes = []
+
+                operador = _valor_estado_masiva(idx, row, "op", row.get("operador", ""))
+                momento = _valor_estado_masiva(idx, row, "momento", row.get("momento_viaje", ""))
+                medio = _valor_estado_masiva(idx, row, "medio", row.get("medio_contacto", ""))
+                quien = _valor_estado_masiva(idx, row, "quien", row.get("quien_contacta", ""))
+                ciudad_v = _valor_estado_masiva(idx, row, "ciudad", row.get("ciudad", ""))
+                tipo_contacto_v = _valor_estado_masiva(idx, row, "tipo_contacto", row.get("tipo_contacto", "Reclamación/Complaint"))
+
+                comentario_key = f"masiva_com_{idx}"
+                comentario_v = limpiar_valor_masivo(
+                    st.session_state.get(comentario_key, row.get("comentario", ""))
+                )
+
+                for nombre_campo, valor_campo in {
+                    "Operador": operador,
+                    "Momento Viaje": momento,
+                    "Medio de Contacto": medio,
+                    "Quién Contacta": quien,
+                    "Ciudad": ciudad_v,
+                    "Tipo de Contacto": tipo_contacto_v,
+                    "Comentario": comentario_v,
+                }.items():
+                    if not _campo_completo(valor_campo):
+                        pendientes.append(nombre_campo)
+
+                resolucion_v = ""
+                monto_v = ""
+
+                if tipo_contacto_v == "Información/Information":
+                    area_v = _valor_estado_masiva(idx, row, "area_info", row.get("area", ""))
+                    resolucion_v = _valor_estado_masiva(idx, row, "resolucion_info", row.get("resolucion", ""))
+                    if not _campo_completo(area_v): pendientes.append("Área Relacionada")
+                    if not _campo_completo(resolucion_v): pendientes.append("Resolución")
+                    if area_v == "Hotel":
+                        hotel_v = _valor_estado_masiva(idx, row, "hotel_info", row.get("hotel", ""))
+                        if not _campo_completo(hotel_v): pendientes.append("Hotel")
+                    if area_v == "Traslados/Transfers":
+                        tipo_traslado_v = _valor_estado_masiva(idx, row, "tipo_traslado_info", row.get("tipo_traslado", ""))
+                        if not _campo_completo(tipo_traslado_v): pendientes.append("Tipo de Traslado")
+                    monto_v = _valor_estado_masiva(idx, row, "monto_info", row.get("monto", ""))
+
+                elif tipo_contacto_v == "Reclamación/Complaint":
+                    area_rel_v = _valor_estado_masiva(idx, row, "area_reclamo", row.get("area_relacionada", ""))
+                    tipo_inc_v = _valor_estado_masiva(idx, row, "tipo_incidencia_reclamo", row.get("tipo_incidencia", ""))
+                    resolucion_v = _valor_estado_masiva(idx, row, "resolucion_reclamo", row.get("resolucion", ""))
+                    resultado_v = _valor_estado_masiva(idx, row, "resultado_reclamo", row.get("resultado", ""))
+                    if not _campo_completo(area_rel_v): pendientes.append("Área Relacionada")
+                    if not _campo_completo(tipo_inc_v): pendientes.append("Tipo de Incidencia")
+                    if not _campo_completo(resolucion_v): pendientes.append("Resolución")
+                    if not _campo_completo(resultado_v): pendientes.append("Resultado")
+                    if area_rel_v == "Hotel":
+                        hotel_v = _valor_estado_masiva(idx, row, "hotel_reclamo", row.get("hotel", ""))
+                        if not _campo_completo(hotel_v): pendientes.append("Hotel")
+                    if area_rel_v == "Guías/Guides":
+                        trayecto_v = _valor_estado_masiva(idx, row, "trayecto_guia", row.get("trayecto", ""))
+                        guia_v = _valor_estado_masiva(idx, row, "guia_reclamo", row.get("guia", ""))
+                        if not _campo_completo(trayecto_v): pendientes.append("Trayecto")
+                        if not _campo_completo(guia_v): pendientes.append("Guía")
+                    if area_rel_v == "Traslados/Transfers":
+                        if tipo_inc_v.startswith("TRF"):
+                            tipo_traslado_v = _valor_estado_masiva(idx, row, "tipo_traslado_reclamo", row.get("tipo_traslado", ""))
+                            if not _campo_completo(tipo_traslado_v): pendientes.append("Tipo de Traslado")
+                        if tipo_inc_v.startswith("BUS"):
+                            trayecto_v = _valor_estado_masiva(idx, row, "trayecto_bus", row.get("trayecto", ""))
+                            if not _campo_completo(trayecto_v): pendientes.append("Trayecto")
+                    if area_rel_v == "Generales/General" and tipo_inc_v.startswith("Itinerario"):
+                        trayecto_v = _valor_estado_masiva(idx, row, "trayecto_general", row.get("trayecto", ""))
+                        if not _campo_completo(trayecto_v): pendientes.append("Trayecto")
+                    monto_v = _valor_estado_masiva(idx, row, "monto_reclamo", row.get("monto", ""))
+
+                elif tipo_contacto_v == "Otro/Other":
+                    resolucion_v = _valor_estado_masiva(idx, row, "resolucion_otro", row.get("resolucion", ""))
+                    if not _campo_completo(resolucion_v): pendientes.append("Resolución")
+                    monto_v = _valor_estado_masiva(idx, row, "monto_otro", row.get("monto", ""))
+
+                elif tipo_contacto_v == "Cuestionario de Satisfacción":
+                    area_rel_v = _valor_estado_masiva(idx, row, "area_qs", row.get("area_relacionada", ""))
+                    tipo_inc_v = _valor_estado_masiva(idx, row, "tipo_incidencia_qs", row.get("tipo_incidencia", ""))
+                    if not _campo_completo(area_rel_v): pendientes.append("Área Relacionada")
+                    if not _campo_completo(tipo_inc_v): pendientes.append("Tipo de Incidencia")
+                    if area_rel_v == "Hotel":
+                        hotel_v = _valor_estado_masiva(idx, row, "hotel_qs", row.get("hotel", ""))
+                        if not _campo_completo(hotel_v): pendientes.append("Hotel")
+                    if area_rel_v == "Guías/Guides":
+                        guia_v = _valor_estado_masiva(idx, row, "guia_qs", row.get("guia", ""))
+                        if not _campo_completo(guia_v): pendientes.append("Guía")
+
+                if resolucion_v.startswith("Reembolso") or resolucion_v == "Compensación/Compensation":
+                    if not _campo_completo(monto_v): pendientes.append("Monto")
+
+                return pendientes
 
             for idx_masiva, row in df_editor_base.reset_index(drop=True).iterrows():
+                eliminado_key = f"{st.session_state.get('masiva_upload_id', '')}_{idx_masiva}"
+                if st.session_state.get("masiva_registros_eliminados", {}).get(eliminado_key):
+                    continue
+
                 loc_row = limpiar_valor_masivo(row.get("localizador", ""))
                 comentario_row = limpiar_valor_masivo(row.get("comentario", ""))
-                titulo_expander = f"{idx_masiva + 1}. {loc_row}"
+                pendientes_header = _pendientes_registro_masiva(idx_masiva, row)
+                if pendientes_header:
+                    titulo_expander = f"🟡 {idx_masiva + 1}. {loc_row}"
+                else:
+                    titulo_expander = f"🟢 {idx_masiva + 1}. {loc_row}"
 
                 with st.expander(titulo_expander, expanded=(idx_masiva < 3)):
                     url_reserva_masiva = (
                         "https://www.europamundo-online.com/reservas/"
                         f"buscarreserva2.asp?coreserva={loc_row}"
                     )
-                    st.link_button(
-                        "🔎 Ver Reserva",
-                        url_reserva_masiva,
-                        use_container_width=False,
-                        disabled=not bool(loc_row),
-                    )
+                    c_accion1, c_accion2, c_accion3 = st.columns([1, 1, 5])
+                    with c_accion1:
+                        st.link_button(
+                            "🔎 Ver Reserva",
+                            url_reserva_masiva,
+                            use_container_width=True,
+                            disabled=not bool(loc_row),
+                        )
+                    with c_accion2:
+                        if st.button(
+                            "🗑️ Eliminar registro",
+                            key=f"masiva_eliminar_{idx_masiva}",
+                            use_container_width=True,
+                            help="Quita este registro de la revisión actual. No se guardará en Google Sheets.",
+                        ):
+                            st.session_state.setdefault("masiva_registros_eliminados", {})[eliminado_key] = True
+                            limpiar_estado_editor_masivo()
+                            st.rerun()
+
 
                     c_base1, c_base2, c_base3, c_base4 = st.columns(4)
                     with c_base1:
@@ -1259,7 +1455,24 @@ if uploaded_file is not None:
                             True
                         )
                     with c_base6:
-                        st.text_area("Comentario", value=comentario_row, disabled=True, key=f"masiva_com_{idx_masiva}", height=90)
+                        comentario_key = f"masiva_com_{idx_masiva}"
+                        if comentario_key not in st.session_state:
+                            st.session_state[comentario_key] = comentario_row
+
+                        c_com1, c_com2 = st.columns([4, 1])
+                        with c_com1:
+                            comentario_editado = st.text_area(
+                                "Comentario editable",
+                                key=comentario_key,
+                                height=110,
+                                help="Puedes modificar, resumir o eliminar información sensible antes de guardar.",
+                            )
+                        with c_com2:
+                            st.write("")
+                            st.write("")
+                            if st.button("🧹 Limpiar", key=f"masiva_limpiar_com_{idx_masiva}"):
+                                st.session_state[comentario_key] = ""
+                                st.rerun()
 
                     c1, c2, c3, c4 = st.columns(4)
                     with c1:
@@ -1319,7 +1532,7 @@ if uploaded_file is not None:
 
                         resolucion = _selectbox_masiva("Resolución", RESOLUCIONES, row.get("resolucion", ""), f"masiva_resolucion_info_{idx_masiva}", True)
                         if resolucion.startswith("Reembolso") or resolucion == "Compensación/Compensation":
-                            monto = st.text_input("Monto compensación o tipo de compensación", value=row.get("monto", ""), key=f"masiva_monto_info_{idx_masiva}")
+                            monto = _text_input_masiva("Monto compensación o tipo de compensación", row.get("monto", ""), f"masiva_monto_info_{idx_masiva}", required=True)
 
                     elif tipo_contacto == "Reclamación/Complaint":
                         with c6:
@@ -1370,14 +1583,14 @@ if uploaded_file is not None:
                             resolucion = _selectbox_masiva("Resolución", RESOLUCIONES, row.get("resolucion", ""), f"masiva_resolucion_reclamo_{idx_masiva}", True)
                         with c_r2:
                             if resolucion.startswith("Reembolso") or resolucion == "Compensación/Compensation":
-                                monto = st.text_input("Monto compensación o tipo de compensación", value=row.get("monto", ""), key=f"masiva_monto_reclamo_{idx_masiva}")
+                                monto = _text_input_masiva("Monto compensación o tipo de compensación", row.get("monto", ""), f"masiva_monto_reclamo_{idx_masiva}", required=True)
                         with c_r3:
                             resultado = _selectbox_masiva("Resultado", resultado_opts, row.get("resultado", ""), f"masiva_resultado_reclamo_{idx_masiva}", True)
 
                     elif tipo_contacto == "Otro/Other":
                         resolucion = _selectbox_masiva("Resolución Otros", RESOLUCIONES, row.get("resolucion", ""), f"masiva_resolucion_otro_{idx_masiva}", True)
                         if resolucion.startswith("Reembolso") or resolucion == "Compensación/Compensation":
-                            monto = st.text_input("Monto compensación o tipo de compensación", value=row.get("monto", ""), key=f"masiva_monto_otro_{idx_masiva}")
+                            monto = _text_input_masiva("Monto compensación o tipo de compensación", row.get("monto", ""), f"masiva_monto_otro_{idx_masiva}", required=True)
 
                     elif tipo_contacto == "Cuestionario de Satisfacción":
                         with c6:
@@ -1424,7 +1637,7 @@ if uploaded_file is not None:
                         "trayecto": trayecto,
                         "guia": guia,
                         "tipo_incidencia": tipo_incidencia,
-                        "comentario": comentario_row,
+                        "comentario": limpiar_valor_masivo(comentario_editado),
                         "resolucion": resolucion,
                         "monto": monto,
                         "resultado": resultado,
@@ -1451,11 +1664,10 @@ if uploaded_file is not None:
         st.error(f"No se pudo leer el archivo cargado: {e}")
 
 if errores_totales:
-    with st.expander("⚠️ Validaciones pendientes", expanded=True):
-        for err in errores_totales[:150]:
-            st.warning(err)
-        if len(errores_totales) > 150:
-            st.warning(f"Hay {len(errores_totales) - 150} validaciones adicionales no mostradas.")
+    st.info(
+        "Hay campos pendientes en los registros visibles. Revísalos mediante los indicadores 🟡 de cada registro. "
+        "Los registros eliminados no se validan ni se guardan."
+    )
 
 def activar_guardado_masivo():
     st.session_state.guardando_masiva = True
