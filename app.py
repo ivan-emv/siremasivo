@@ -603,7 +603,7 @@ def construir_filas_retrasos_desde_editor(df_editor, nombre_usuario: str) -> tup
         return [], ["No hay registros para guardar."]
 
     requeridos_comunes = [
-        "fecha_inicio", "fecha_registro", "localizador", "operador", "comentario",
+        "fecha_inicio", "fecha_registro", "localizador", "operador",
         "momento_viaje", "medio_contacto", "quien_contacta", "ciudad", "tipo_contacto",
     ]
 
@@ -1198,7 +1198,7 @@ if uploaded_file is not None:
             st.success(f"Archivo leído correctamente. Registros detectados: {len(df_editor_base)}")
             st.info(
                 "Completa los campos de clasificación por cada fila. El campo Momento Viaje se calcula automáticamente a partir de FECHA INICIO, FECHA DE FINALIZACIÓN y FECHA. "
-                "El comentario es editable: puedes eliminar textos irrelevantes, depurar datos protegidos o borrar registros completos de la revisión antes de guardar. El semáforo del encabezado indica si el registro está completo."
+                "El comentario es editable y opcional: puedes eliminar textos irrelevantes, depurar datos protegidos o dejarlo vacío antes de guardar. También puedes borrar registros completos de la revisión. El semáforo del encabezado indica si el resto de los datos obligatorios está completo."
             )
 
             columnas_visibles = [
@@ -1281,11 +1281,6 @@ if uploaded_file is not None:
                 ciudad_v = _valor_estado_masiva(idx, row, "ciudad", row.get("ciudad", ""))
                 tipo_contacto_v = _valor_estado_masiva(idx, row, "tipo_contacto", row.get("tipo_contacto", "Reclamación/Complaint"))
 
-                comentario_key = f"masiva_com_{idx}"
-                comentario_v = limpiar_valor_masivo(
-                    st.session_state.get(comentario_key, row.get("comentario", ""))
-                )
-
                 for nombre_campo, valor_campo in {
                     "Operador": operador,
                     "Momento Viaje": momento,
@@ -1293,7 +1288,6 @@ if uploaded_file is not None:
                     "Quién Contacta": quien,
                     "Ciudad": ciudad_v,
                     "Tipo de Contacto": tipo_contacto_v,
-                    "Comentario": comentario_v,
                 }.items():
                     if not _campo_completo(valor_campo):
                         pendientes.append(nombre_campo)
