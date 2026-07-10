@@ -1365,6 +1365,10 @@ if uploaded_file is not None:
 
                 return pendientes
 
+            def _limpiar_comentario_masivo(comentario_key: str):
+                """Limpia el comentario mediante callback, antes del nuevo render de Streamlit."""
+                st.session_state[comentario_key] = ""
+
             for idx_masiva, row in df_editor_base.reset_index(drop=True).iterrows():
                 eliminado_key = f"{st.session_state.get('masiva_upload_id', '')}_{idx_masiva}"
                 if st.session_state.get("masiva_registros_eliminados", {}).get(eliminado_key):
@@ -1444,9 +1448,12 @@ if uploaded_file is not None:
                         with c_com2:
                             st.write("")
                             st.write("")
-                            if st.button("🧹 Limpiar", key=f"masiva_limpiar_com_{idx_masiva}"):
-                                st.session_state[comentario_key] = ""
-                                st.rerun()
+                            st.button(
+                                "🧹 Limpiar",
+                                key=f"masiva_limpiar_com_{idx_masiva}",
+                                on_click=_limpiar_comentario_masivo,
+                                args=(comentario_key,),
+                            )
 
                     c1, c2, c3, c4 = st.columns(4)
                     with c1:
