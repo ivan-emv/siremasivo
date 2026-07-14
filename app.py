@@ -22,8 +22,6 @@ SHEET_ID_BD = "1FyWpAjXMkuOW4TM71Z521lFyTX6nUQ8hNE8RGY3cnS4"
 SHEET_ID_REGISTROS = "19v6_WKu7dNoRiyRwgP4ZbXF047jd-MZJba6lJGP3iT0"
 
 WS_DATOS = "DATOS"
-WS_COMPLETO = "COMPLETO"
-
 TAMANO_BLOQUE_MASIVA = 15
 
 RESOLUCIONES = [
@@ -69,32 +67,10 @@ HEADERS_REGISTRO = [
 # UTILIDADES
 # =========================================================
 def init_session():
-    if "incidencias" not in st.session_state:
-        st.session_state.incidencias = []
-    if "datos_generales" not in st.session_state:
-        st.session_state.datos_generales = {}
-    if "form_counter" not in st.session_state:
-        st.session_state.form_counter = 0
     if "admin_autenticado" not in st.session_state:
         st.session_state.admin_autenticado = False
     if "admin_usuario" not in st.session_state:
         st.session_state.admin_usuario = ""
-
-    # Prefill / multi-localizador
-    if "operador_prefill" not in st.session_state:
-        st.session_state.operador_prefill = ""
-    if "fecha_inicio_prefill" not in st.session_state:
-        st.session_state.fecha_inicio_prefill = ""
-    if "prefill_encontrado" not in st.session_state:
-        st.session_state.prefill_encontrado = False
-    if "localizadores_extra" not in st.session_state:
-        st.session_state.localizadores_extra = []
-    if "localizadores_extra_faltantes" not in st.session_state:
-        st.session_state.localizadores_extra_faltantes = []
-    if "guardando_final" not in st.session_state:
-        st.session_state.guardando_final = False
-    if "finalizar_pendiente" not in st.session_state:
-        st.session_state.finalizar_pendiente = False
 
     # Control de guardado para Carga Masiva Retrasos
     if "guardando_masiva" not in st.session_state:
@@ -103,11 +79,8 @@ def init_session():
         st.session_state.guardar_masiva_pendiente = False
     if "masiva_guardado_ok" not in st.session_state:
         st.session_state.masiva_guardado_ok = False
-        st.session_state.masiva_registros_excluidos = {}
     if "masiva_upload_id" not in st.session_state:
         st.session_state.masiva_upload_id = ""
-    if "masiva_registros_excluidos" not in st.session_state:
-        st.session_state.masiva_registros_excluidos = {}
     if "masiva_registros_eliminados" not in st.session_state:
         st.session_state.masiva_registros_eliminados = {}
     if "masiva_bloque_actual" not in st.session_state:
@@ -116,6 +89,12 @@ def init_session():
         st.session_state.masiva_bloques_guardados = []
     if "masiva_resumen_bloques" not in st.session_state:
         st.session_state.masiva_resumen_bloques = []
+    if "masiva_df_preparado" not in st.session_state:
+        st.session_state.masiva_df_preparado = None
+    if "masiva_errores_archivo" not in st.session_state:
+        st.session_state.masiva_errores_archivo = []
+    if "masiva_df_upload_id" not in st.session_state:
+        st.session_state.masiva_df_upload_id = ""
 
 
 def get_gspread_client():
@@ -140,56 +119,6 @@ def get_gspread_client():
         scopes=scopes,
     )
     return gspread.authorize(credentials)
-
-
-def get_all_records_safe(worksheet, expected_headers=None):
-    """Obtiene registros intentando lectura por headers esperados y con fallback seguro.
-    Útil cuando el Sheet puede no tener aún nuevas columnas (p. ej. incidencia_id).
-    """
-    try:
-        if expected_headers:
-            return worksheet.get_all_records(expected_headers=expected_headers)
-        return worksheet.get_all_records()
-    except Exception:
-        # Fallback: lectura sin expected_headers
-        try:
-            return worksheet.get_all_records()
-        except Exception:
-            return []
-
-
-
-def formatear_fecha_ddmmaaaa(texto: str) -> str:
-    """Normaliza input a DD/MM/AAAA (solo dígitos y /)."""
-    texto = re.sub(r"[^0-9]", "", texto or "")
-    if len(texto) > 4:
-        texto = texto[:2] + "/" + texto[2:4] + "/" + texto[4:8]
-    elif len(texto) > 2:
-        texto = texto[:2] + "/" + texto[2:4]
-    return texto
-
-
-def parsear_fecha_ddmmaaaa(texto: str):
-    """Convierte DD/MM/AAAA a datetime.date. Devuelve None si no es válida."""
-    texto = formatear_fecha_ddmmaaaa(texto)
-    if not re.match(r"^\d{2}/\d{2}/\d{4}$", texto or ""):
-        return None
-    try:
-        return datetime.datetime.strptime(texto, "%d/%m/%Y").date()
-    except Exception:
-        return None
-
-
-def fecha_a_texto_ddmmaaaa(valor) -> str:
-    """Normaliza una fecha (date/datetime/str) a DD/MM/AAAA."""
-    if isinstance(valor, datetime.datetime):
-        return valor.strftime("%d/%m/%Y")
-    if isinstance(valor, datetime.date):
-        return valor.strftime("%d/%m/%Y")
-    return formatear_fecha_ddmmaaaa(str(valor or ""))
-
-
-
 
 
 def normalizar_fecha_masiva(valor) -> str:
@@ -476,62 +405,6 @@ def leer_archivo_retrasos_xls(uploaded_file):
     raise RuntimeError("Formato no reconocido. Carga un .xls HTML exportado desde el sistema o un .xlsx válido.")
 
 
-def construir_filas_retrasos_desde_df(df, valores_comunes: dict) -> tuple[list, list]:
-    """Mapea el DataFrame del XLS a HEADERS_REGISTRO. Devuelve (filas, errores)."""
-    filas = []
-    errores = []
-
-    columnas_requeridas = ["RESERVA", "OBSERVACION", "OPERADOR", "FECHA INICIO", "FECHA DE FINALIZACION", "FECHA"]
-    columnas_actuales = {normalizar_nombre_columna_masiva(c): c for c in df.columns}
-    faltantes = [c for c in columnas_requeridas if c not in columnas_actuales]
-    if faltantes:
-        return [], ["Faltan columnas obligatorias en el archivo: " + ", ".join(faltantes)]
-
-    for i, row in df.iterrows():
-        localizador = limpiar_valor_masivo(row.get(columnas_actuales["RESERVA"], "")).upper()
-        comentario = limpiar_valor_masivo(row.get(columnas_actuales["OBSERVACION"], ""))
-        operador_xls = limpiar_valor_masivo(row.get(columnas_actuales["OPERADOR"], ""))
-        operador = operador_xls
-        fecha_inicio = normalizar_fecha_masiva(row.get(columnas_actuales["FECHA INICIO"], ""))
-        fecha_finalizacion = normalizar_fecha_masiva(row.get(columnas_actuales["FECHA DE FINALIZACION"], ""))
-        fecha_registro = normalizar_fecha_masiva(row.get(columnas_actuales["FECHA"], ""))
-        momento_viaje_auto = calcular_momento_viaje_masivo(fecha_inicio, fecha_finalizacion, fecha_registro)
-
-        if not localizador and not comentario:
-            continue
-
-        fila_num = i + 2
-        if not localizador:
-            errores.append(f"Fila {fila_num}: falta RESERVA/localizador.")
-        if not comentario:
-            errores.append(f"Fila {fila_num}: falta OBSERVACION/comentario.")
-        if not operador:
-            errores.append(f"Fila {fila_num}: falta OPERADOR.")
-        if not fecha_inicio:
-            errores.append(f"Fila {fila_num}: FECHA INICIO no tiene formato válido.")
-        if not fecha_finalizacion:
-            errores.append(f"Fila {fila_num}: FECHA DE FINALIZACIÓN no tiene formato válido.")
-        if not fecha_registro:
-            errores.append(f"Fila {fila_num}: FECHA no tiene formato válido.")
-
-        fila = {col: "" for col in HEADERS_REGISTRO}
-        fila.update(valores_comunes or {})
-        fila.update({
-            "fecha_inicio": fecha_inicio,
-            "fecha_finalizacion": fecha_finalizacion,
-            "fecha_registro": fecha_registro,
-            "momento_viaje": momento_viaje_auto,
-            "localizador": localizador,
-            "operador_xls": operador_xls,
-            "operador": operador,
-            "comentario": comentario,
-        })
-        filas.append(fila)
-
-    return filas, errores
-
-
-
 def preparar_editor_retrasos_desde_df(df, nombre_usuario: str, operadores_catalogo: list = None) -> tuple[object, list]:
     """Prepara un DataFrame editable: Usuario es global; el resto se completa por fila."""
     import pandas as pd
@@ -695,16 +568,6 @@ def construir_filas_retrasos_desde_editor(df_editor, nombre_usuario: str) -> tup
 
     return filas, errores
 
-def comentario_obligatorio_completo(texto: str) -> bool:
-    """Devuelve True si el comentario contiene texto útil."""
-    return bool(texto and str(texto).strip())
-
-
-def validar_comentario_obligatorio(texto: str) -> bool:
-    """Compatibilidad interna: valida comentario sin interrumpir el flujo."""
-    return comentario_obligatorio_completo(texto)
-
-
 def _deduplicar_preservando_orden(valores: list) -> list:
     """Elimina duplicados preservando el orden original."""
     resultado = []
@@ -780,17 +643,6 @@ def filtrar_trayectos_por_ciudad(trayectos: list, ciudad: str) -> list:
 
 
 
-
-def obtener_targets_multi_localizador(idx: int, principal_loc: str):
-    """Devuelve lista de targets extra [{localizador, operador, fecha_inicio}] y lista de errores.
-    La UI se controla con st.session_state['ml_show_<idx>'] y 'ml_count_<idx>'.
-    """
-    errores = []
-    targets = []
-
-    show = st.session_state.get(f"ml_show_{idx}", False)
-    if not show:
-        return targets, errores
 
 # =========================================================
 # PERSISTENCIA (GUARDADO EN GOOGLE SHEETS)
@@ -948,14 +800,6 @@ def guardar_lote_google_sheets_seguro(lista_filas: list):
             pass
 
 
-def guardar_en_google_sheets_seguro(datos_generales: dict, lista_incidencias: list):
-    """Compatibilidad: guarda incidencias combinando un único bloque de datos generales + lista de incidencias."""
-    filas = []
-    for incidencia in (lista_incidencias or []):
-        filas.append({**(datos_generales or {}), **(incidencia or {})})
-    return guardar_lote_google_sheets_seguro(filas)
-
-
 # =========================================================
 # INICIO APP
 
@@ -979,57 +823,6 @@ hide_streamlit_style = """
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-
-st.markdown("""
-<style>
-.status-ok {
-    display: inline-block;
-    padding: 0.15rem 0.5rem;
-    border-radius: 999px;
-    background: rgba(39, 174, 96, 0.14);
-    border: 1px solid rgba(39, 174, 96, 0.45);
-    font-size: 0.85rem;
-}
-.status-pending {
-    display: inline-block;
-    padding: 0.15rem 0.5rem;
-    border-radius: 999px;
-    background: rgba(241, 196, 15, 0.14);
-    border: 1px solid rgba(241, 196, 15, 0.45);
-    font-size: 0.85rem;
-}
-</style>
-""", unsafe_allow_html=True)
-# =========================================================
-# HERRAMIENTAS RÁPIDAS (SIEMPRE DISPONIBLES EN BARRA LATERAL)
-# =========================================================
-def render_herramientas_sidebar():
-    with st.sidebar:
-        localizador = st.text_input("Inserte Localizador", key="sidebar_localizador")
-        if localizador:
-            st.link_button(
-                "Ver Reserva",
-                f"https://www.europamundo-online.com/reservas/buscarreserva2.asp?coreserva={localizador}",
-                use_container_width=True
-            )
-        tr = st.text_input("Inserte TR", key="sidebar_tr")
-        tipo_traslado = st.radio("Tipo de Traslado", ["Llegada", "Salida"], horizontal=True, key="sidebar_tipo_traslado")
-        if tr:
-            if tipo_traslado == "Llegada":
-                url_tr = (
-                    "https://www.europamundo-online.com/Reservas/ListadoTraslados.asp?"
-                    "serie=l&Orden1=FECHA&Asc1=asc&Orden2=ciudad&Asc2=asc&campo=T.co_reserva&"
-                    f"numReg=15&ViajeR=&FechaR=&valor={tr}"
-                )
-            else:
-                url_tr = (
-                    "https://www.europamundo-online.com/Reservas/ListadoTraslados.asp?"
-                    "serie=s&Orden1=FECHA&Asc1=asc&Orden2=ciudad&Asc2=asc&campo=T.co_reserva&"
-                    f"numReg=15&ViajeR=&FechaR=&valor={tr}"
-                )
-            st.link_button("Ver Traslado", url_tr, use_container_width=True)
-        st.link_button("RESPOND", "https://app.respond.io", use_container_width=True)
-        st.link_button("INFO EMV", "https://esuezhg4oon.typeform.com/InfoCC", use_container_width=True)
 
 # =========================================================
 # ADMIN MÍNIMO: SOLO ACTUALIZAR CATÁLOGOS/CACHÉ
@@ -1069,7 +862,6 @@ with st.sidebar.expander("🔐 Acceso Administrador", expanded=not st.session_st
         if st.button("🚪 Cerrar sesión", key="btn_logout_admin_masiva"):
             st.session_state.admin_autenticado = False
             st.session_state.admin_usuario = ""
-            st.cache_data.clear()
             st.rerun()
 
 # Encabezado principal
@@ -1088,7 +880,6 @@ st.caption(
     "Solo el Usuario aplica a todo el lote; la clasificación restante se completa por cada registro."
 )
 
-render_herramientas_sidebar()
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def cargar_catalogos_masiva():
@@ -1167,11 +958,13 @@ if uploaded_file is None:
     st.session_state.guardar_masiva_pendiente = False
     st.session_state.masiva_guardado_ok = False
     st.session_state.masiva_upload_id = ""
-    st.session_state.masiva_registros_excluidos = {}
     st.session_state.masiva_registros_eliminados = {}
     st.session_state.masiva_bloque_actual = 0
     st.session_state.masiva_bloques_guardados = []
     st.session_state.masiva_resumen_bloques = []
+    st.session_state.masiva_df_preparado = None
+    st.session_state.masiva_errores_archivo = []
+    st.session_state.masiva_df_upload_id = ""
     limpiar_estado_editor_masivo()
 else:
     try:
@@ -1184,11 +977,13 @@ else:
         st.session_state.guardando_masiva = False
         st.session_state.guardar_masiva_pendiente = False
         st.session_state.masiva_guardado_ok = False
-        st.session_state.masiva_registros_excluidos = {}
         st.session_state.masiva_registros_eliminados = {}
         st.session_state.masiva_bloque_actual = 0
         st.session_state.masiva_bloques_guardados = []
         st.session_state.masiva_resumen_bloques = []
+        st.session_state.masiva_df_preparado = None
+        st.session_state.masiva_errores_archivo = []
+        st.session_state.masiva_df_upload_id = ""
         limpiar_estado_editor_masivo()
 
 filas = []
@@ -1196,9 +991,30 @@ errores_totales = []
 
 if uploaded_file is not None:
     try:
-        df_retrasos = leer_archivo_retrasos_xls(uploaded_file)
         usuario_final = "" if nombre_usuario == "SELECCIONE" else nombre_usuario
-        df_editor_base, errores_archivo = preparar_editor_retrasos_desde_df(df_retrasos, usuario_final, OPERADORES)
+
+        # El Excel se lee, normaliza y prepara una sola vez por archivo.
+        # Los reruns provocados por selectboxes, botones o expansores reutilizan
+        # el DataFrame guardado en session_state.
+        if (
+            st.session_state.get("masiva_df_preparado") is None
+            or st.session_state.get("masiva_df_upload_id", "") != upload_id_actual
+        ):
+            with st.spinner("Procesando el archivo por primera vez..."):
+                df_retrasos = leer_archivo_retrasos_xls(uploaded_file)
+                df_preparado, errores_preparacion = preparar_editor_retrasos_desde_df(
+                    df_retrasos,
+                    "",
+                    OPERADORES,
+                )
+                st.session_state.masiva_df_preparado = df_preparado
+                st.session_state.masiva_errores_archivo = errores_preparacion
+                st.session_state.masiva_df_upload_id = upload_id_actual
+
+        # Se trabaja con una copia ligera para evitar modificar accidentalmente
+        # el DataFrame maestro almacenado en session_state.
+        df_editor_base = st.session_state.masiva_df_preparado.copy()
+        errores_archivo = list(st.session_state.get("masiva_errores_archivo", []))
 
         # No volcamos aquí los errores por fila del archivo original.
         # Motivo: el usuario puede eliminar visualmente registros antes de guardar;
@@ -1721,14 +1537,6 @@ if uploaded_file is not None:
                     if "Usuario común del lote" in str(error)
                 ]
 
-            with st.expander("Vista previa técnica del bloque a guardar", expanded=False):
-                if filas:
-                    st.dataframe(pd.DataFrame(filas), width="stretch")
-                else:
-                    st.caption(
-                        "Todos los registros de este bloque fueron eliminados. "
-                        "No se enviarán filas a Google Sheets."
-                    )
 
     except Exception as e:
         errores_totales.append(f"No se pudo leer el archivo cargado: {e}")
@@ -1819,7 +1627,8 @@ if st.session_state.get("guardar_masiva_pendiente", False):
         for indice_finalizado in range(inicio_bloque_masiva, fin_bloque_masiva):
             limpiar_estado_registro_masivo(indice_finalizado)
 
-        st.cache_data.clear()
+        # Los catálogos no cambian al guardar un bloque.
+        # Se conserva la caché para que la transición al siguiente sea inmediata.
         st.session_state.guardando_masiva = False
         st.session_state.masiva_bloque_actual = bloque_actual_masiva + 1
         st.rerun()
