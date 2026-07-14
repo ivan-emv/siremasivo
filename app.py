@@ -24,7 +24,7 @@ SHEET_ID_REGISTROS = "19v6_WKu7dNoRiyRwgP4ZbXF047jd-MZJba6lJGP3iT0"
 WS_DATOS = "DATOS"
 WS_COMPLETO = "COMPLETO"
 
-TAMANO_BLOQUE_MASIVA = 20
+TAMANO_BLOQUE_MASIVA = 15
 
 RESOLUCIONES = [
     "SELECCIONE", "Reembolso Parcial/Partial Reimbursement", "Reembolso Total/Total Reimbursement",
@@ -1208,6 +1208,10 @@ if uploaded_file is not None:
         # edited_records, es decir, sobre los registros que continúan visibles.
         if errores_archivo and df_editor_base.empty:
             errores_totales.extend(errores_archivo)
+        else:
+            # Los avisos asociados a filas concretas no se arrastran a la validación
+            # del bloque, porque esas filas pueden haber sido eliminadas de la revisión.
+            errores_totales = []
 
         if df_editor_base.empty:
             st.warning("El archivo no contiene registros válidos para preparar la carga.")
@@ -1260,7 +1264,7 @@ if uploaded_file is not None:
                 f"de {total_registros_masiva}"
             )
             st.caption(
-                "Solo se muestran hasta 20 registros simultáneamente. "
+                "Solo se muestran hasta 15 registros simultáneamente. "
                 "Al guardar el bloque, la herramienta avanzará automáticamente."
             )
 
@@ -1673,6 +1677,10 @@ if uploaded_file is not None:
                     })
 
             import pandas as pd
+
+            # La validación de cada bloque parte de cero y solo considera
+            # los registros que continúan visibles.
+            errores_totales = []
             edited_df = pd.DataFrame(edited_records)
             total_visibles_bloque = len(edited_records)
             total_original_bloque = len(df_bloque_masiva)
@@ -1691,6 +1699,25 @@ if uploaded_file is not None:
                 filas = []
                 errores_editor = []
 
+            # Coherencia entre semáforo y validación final:
+            # si todos los registros visibles están completos según la misma función,
+            # descartamos cualquier error residual que no pertenezca al bloque actual.
+            pendientes_visibles_bloque = []
+            for idx_visible, row_visible in df_bloque_masiva.iterrows():
+                eliminado_visible_key = (
+                    f"{st.session_state.get('masiva_upload_id', '')}_{idx_visible}"
+                )
+                if st.session_state.get("masiva_registros_eliminados", {}).get(
+                    eliminado_visible_key
+                ):
+                    continue
+                pendientes_visibles_bloque.extend(
+                    _pendientes_registro_masiva(idx_visible, row_visible)
+                )
+
+            if not pendientes_visibles_bloque and total_visibles_bloque > 0:
+                errores_totales = []
+
             with st.expander("Vista previa técnica del bloque a guardar", expanded=False):
                 if filas:
                     st.dataframe(pd.DataFrame(filas), width="stretch")
@@ -1706,7 +1733,7 @@ if uploaded_file is not None:
 
 if errores_totales:
     st.info(
-        "Hay campos pendientes en los registros visibles de este bloque. "
+        "Hay campos pendientes en alguno de los registros visibles de este bloque. "
         "Revísalos mediante los indicadores 🟡. Los eliminados no se validan ni se guardan."
     )
 
