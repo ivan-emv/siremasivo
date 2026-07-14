@@ -24,7 +24,7 @@ SHEET_ID_REGISTROS = "19v6_WKu7dNoRiyRwgP4ZbXF047jd-MZJba6lJGP3iT0"
 WS_DATOS = "DATOS"
 WS_COMPLETO = "COMPLETO"
 
-TAMANO_BLOQUE_MASIVA = 5
+TAMANO_BLOQUE_MASIVA = 15
 
 RESOLUCIONES = [
     "SELECCIONE", "Reembolso Parcial/Partial Reimbursement", "Reembolso Total/Total Reimbursement",
@@ -1433,7 +1433,7 @@ if uploaded_file is not None:
                 else:
                     titulo_expander = f"🟢 {idx_masiva + 1}. {loc_row}"
 
-                with st.expander(titulo_expander, expanded=(posicion_bloque < 1)):
+                with st.expander(titulo_expander, expanded=(posicion_bloque < 0)):
                     url_reserva_masiva = (
                         "https://www.europamundo-online.com/reservas/"
                         f"buscarreserva2.asp?coreserva={loc_row}"
