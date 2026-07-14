@@ -1433,7 +1433,7 @@ if uploaded_file is not None:
                 else:
                     titulo_expander = f"🟢 {idx_masiva + 1}. {loc_row}"
 
-                with st.expander(titulo_expander, expanded=(posicion_bloque < 0)):
+                with st.expander(titulo_expander, expanded=(posicion_bloque < 1)):
                     url_reserva_masiva = (
                         "https://www.europamundo-online.com/reservas/"
                         f"buscarreserva2.asp?coreserva={loc_row}"
@@ -1686,7 +1686,7 @@ if uploaded_file is not None:
             total_original_bloque = len(df_bloque_masiva)
             total_eliminados_bloque = total_original_bloque - total_visibles_bloque
 
-            if nombre_usuario == "SELECCIONE" and total_visibles_bloque > 0:
+            if nombre_usuario == "SELECCIONE":
                 errores_totales.append("Debe seleccionar el Usuario común del lote.")
 
             if total_visibles_bloque > 0:
@@ -1716,7 +1716,10 @@ if uploaded_file is not None:
                 )
 
             if not pendientes_visibles_bloque and total_visibles_bloque > 0:
-                errores_totales = []
+                errores_totales = [
+                    error for error in errores_totales
+                    if "Usuario común del lote" in str(error)
+                ]
 
             with st.expander("Vista previa técnica del bloque a guardar", expanded=False):
                 if filas:
@@ -1732,10 +1735,15 @@ if uploaded_file is not None:
         st.error(f"No se pudo leer el archivo cargado: {e}")
 
 if errores_totales:
-    st.info(
-        "Hay campos pendientes en alguno de los registros visibles de este bloque. "
-        "Revísalos mediante los indicadores 🟡. Los eliminados no se validan ni se guardan."
-    )
+    if nombre_usuario == "SELECCIONE":
+        st.info(
+            "Selecciona el Usuario que aplica al lote antes de guardar o avanzar al siguiente bloque."
+        )
+    else:
+        st.info(
+            "Hay campos pendientes en alguno de los registros visibles de este bloque. "
+            "Revísalos mediante los indicadores 🟡. Los eliminados no se validan ni se guardan."
+        )
 
 def activar_guardado_masivo():
     st.session_state.guardando_masiva = True
@@ -1772,6 +1780,11 @@ if uploaded_file is not None and "df_bloque_masiva" in locals():
 
 if st.session_state.get("guardar_masiva_pendiente", False):
     st.session_state.guardar_masiva_pendiente = False
+
+    if nombre_usuario == "SELECCIONE":
+        st.session_state.guardando_masiva = False
+        st.error("Debe seleccionar el Usuario común del lote antes de guardar o continuar.")
+        st.stop()
 
     if uploaded_file is None or bool(errores_totales):
         st.session_state.guardando_masiva = False
