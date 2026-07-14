@@ -24,6 +24,8 @@ SHEET_ID_REGISTROS = "19v6_WKu7dNoRiyRwgP4ZbXF047jd-MZJba6lJGP3iT0"
 WS_DATOS = "DATOS"
 WS_COMPLETO = "COMPLETO"
 
+TAMANO_BLOQUE_MASIVA = 20
+
 RESOLUCIONES = [
     "SELECCIONE", "Reembolso Parcial/Partial Reimbursement", "Reembolso Total/Total Reimbursement",
     "Compensación/Compensation", "Descuento Próximo Viaje/Next Trip Discount",
@@ -108,6 +110,12 @@ def init_session():
         st.session_state.masiva_registros_excluidos = {}
     if "masiva_registros_eliminados" not in st.session_state:
         st.session_state.masiva_registros_eliminados = {}
+    if "masiva_bloque_actual" not in st.session_state:
+        st.session_state.masiva_bloque_actual = 0
+    if "masiva_bloques_guardados" not in st.session_state:
+        st.session_state.masiva_bloques_guardados = []
+    if "masiva_resumen_bloques" not in st.session_state:
+        st.session_state.masiva_resumen_bloques = []
 
 
 def get_gspread_client():
@@ -803,7 +811,7 @@ def guardar_lote_google_sheets_seguro(lista_filas: list):
 
     if not lista_filas:
         st.warning("No hay incidencias para guardar.")
-        return
+        return False
 
     client = get_gspread_client()
     sheet = client.open_by_key(SHEET_ID_REGISTROS).worksheet(WS_DATOS)
@@ -830,7 +838,7 @@ def guardar_lote_google_sheets_seguro(lista_filas: list):
         # --- Lock ---
         if sheet.acell("Z1").value == "LOCKED":
             st.error("⚠️ El sistema está siendo utilizado por otro usuario. Intenta en unos segundos.")
-            return
+            return False
 
         sheet.update_acell("Z1", "LOCKED")
 
@@ -918,16 +926,19 @@ def guardar_lote_google_sheets_seguro(lista_filas: list):
 
         df = pd.DataFrame(data, columns=headers)
 
+        guardado_correcto = False
         for intento in range(3):
             try:
                 set_with_dataframe(sheet, df, row=start_row, include_column_header=False)
-                st.success("✅ LOS DATOS HAN SIDO CARGADOS EXITOSAMENTE.")
+                guardado_correcto = True
                 break
             except Exception as e:
                 if intento == 2:
                     st.error(f"❌ Error al guardar tras múltiples intentos: {e}")
                 else:
                     time.sleep(1)
+
+        return guardado_correcto
 
     finally:
         # liberar lock aunque haya error
@@ -1158,6 +1169,9 @@ if uploaded_file is None:
     st.session_state.masiva_upload_id = ""
     st.session_state.masiva_registros_excluidos = {}
     st.session_state.masiva_registros_eliminados = {}
+    st.session_state.masiva_bloque_actual = 0
+    st.session_state.masiva_bloques_guardados = []
+    st.session_state.masiva_resumen_bloques = []
     limpiar_estado_editor_masivo()
 else:
     try:
@@ -1172,6 +1186,9 @@ else:
         st.session_state.masiva_guardado_ok = False
         st.session_state.masiva_registros_excluidos = {}
         st.session_state.masiva_registros_eliminados = {}
+        st.session_state.masiva_bloque_actual = 0
+        st.session_state.masiva_bloques_guardados = []
+        st.session_state.masiva_resumen_bloques = []
         limpiar_estado_editor_masivo()
 
 filas = []
@@ -1210,6 +1227,42 @@ if uploaded_file is not None:
             ]
 
             df_editor_base = df_editor_base[[c for c in columnas_visibles if c in df_editor_base.columns]]
+
+            total_registros_masiva = len(df_editor_base)
+            total_bloques_masiva = max(
+                1,
+                (total_registros_masiva + TAMANO_BLOQUE_MASIVA - 1) // TAMANO_BLOQUE_MASIVA,
+            )
+            bloque_actual_masiva = int(st.session_state.get("masiva_bloque_actual", 0) or 0)
+
+            if bloque_actual_masiva >= total_bloques_masiva:
+                st.progress(1.0)
+                st.success(
+                    f"✅ Proceso finalizado. Se administraron {total_registros_masiva} "
+                    f"registros en {total_bloques_masiva} bloques."
+                )
+                for resumen in st.session_state.get("masiva_resumen_bloques", []):
+                    st.caption(resumen)
+                st.stop()
+
+            inicio_bloque_masiva = bloque_actual_masiva * TAMANO_BLOQUE_MASIVA
+            fin_bloque_masiva = min(
+                inicio_bloque_masiva + TAMANO_BLOQUE_MASIVA,
+                total_registros_masiva,
+            )
+            df_bloque_masiva = df_editor_base.iloc[inicio_bloque_masiva:fin_bloque_masiva]
+
+            numero_bloque_visible = bloque_actual_masiva + 1
+            st.progress(inicio_bloque_masiva / total_registros_masiva)
+            st.subheader(
+                f"Bloque {numero_bloque_visible} de {total_bloques_masiva} · "
+                f"Registros {inicio_bloque_masiva + 1}–{fin_bloque_masiva} "
+                f"de {total_registros_masiva}"
+            )
+            st.caption(
+                "Solo se muestran hasta 20 registros simultáneamente. "
+                "Al guardar el bloque, la herramienta avanzará automáticamente."
+            )
 
             momento_opts = ["", "Pre Viaje/Pre Tour", "En Ruta/On Route", "Post Viaje/Post Tour"]
             medio_opts = ["", "Email", "Llamada/Call", "WhatsApp", "LINE", "Telegram", "WeChat"]
@@ -1363,7 +1416,7 @@ if uploaded_file is not None:
                 """Limpia el comentario mediante callback, antes del nuevo render de Streamlit."""
                 st.session_state[comentario_key] = ""
 
-            for idx_masiva, row in df_editor_base.reset_index(drop=True).iterrows():
+            for posicion_bloque, (idx_masiva, row) in enumerate(df_bloque_masiva.iterrows()):
                 eliminado_key = f"{st.session_state.get('masiva_upload_id', '')}_{idx_masiva}"
                 if st.session_state.get("masiva_registros_eliminados", {}).get(eliminado_key):
                     continue
@@ -1376,7 +1429,7 @@ if uploaded_file is not None:
                 else:
                     titulo_expander = f"🟢 {idx_masiva + 1}. {loc_row}"
 
-                with st.expander(titulo_expander, expanded=(idx_masiva < 3)):
+                with st.expander(titulo_expander, expanded=(posicion_bloque < 3)):
                     url_reserva_masiva = (
                         "https://www.europamundo-online.com/reservas/"
                         f"buscarreserva2.asp?coreserva={loc_row}"
@@ -1621,18 +1674,31 @@ if uploaded_file is not None:
 
             import pandas as pd
             edited_df = pd.DataFrame(edited_records)
+            total_visibles_bloque = len(edited_records)
+            total_original_bloque = len(df_bloque_masiva)
+            total_eliminados_bloque = total_original_bloque - total_visibles_bloque
 
-            if nombre_usuario == "SELECCIONE":
+            if nombre_usuario == "SELECCIONE" and total_visibles_bloque > 0:
                 errores_totales.append("Debe seleccionar el Usuario común del lote.")
 
-            filas, errores_editor = construir_filas_retrasos_desde_editor(edited_df, usuario_final)
-            errores_totales.extend(errores_editor)
+            if total_visibles_bloque > 0:
+                filas, errores_editor = construir_filas_retrasos_desde_editor(
+                    edited_df,
+                    usuario_final,
+                )
+                errores_totales.extend(errores_editor)
+            else:
+                filas = []
+                errores_editor = []
 
-            with st.expander("Vista previa técnica de filas a guardar", expanded=False):
-                import pandas as pd
-                st.dataframe(pd.DataFrame(filas).head(100), width="stretch")
-                if len(filas) > 100:
-                    st.caption("Se muestran solo los primeros 100 registros.")
+            with st.expander("Vista previa técnica del bloque a guardar", expanded=False):
+                if filas:
+                    st.dataframe(pd.DataFrame(filas), width="stretch")
+                else:
+                    st.caption(
+                        "Todos los registros de este bloque fueron eliminados. "
+                        "No se enviarán filas a Google Sheets."
+                    )
 
     except Exception as e:
         errores_totales.append(f"No se pudo leer el archivo cargado: {e}")
@@ -1640,46 +1706,86 @@ if uploaded_file is not None:
 
 if errores_totales:
     st.info(
-        "Hay campos pendientes en los registros visibles. Revísalos mediante los indicadores 🟡 de cada registro. "
-        "Los registros eliminados no se validan ni se guardan."
+        "Hay campos pendientes en los registros visibles de este bloque. "
+        "Revísalos mediante los indicadores 🟡. Los eliminados no se validan ni se guardan."
     )
 
 def activar_guardado_masivo():
     st.session_state.guardando_masiva = True
     st.session_state.guardar_masiva_pendiente = True
 
-if st.session_state.get("guardando_masiva", False):
-    st.info("Procesando carga masiva. Por favor, espera un momento...")
+if uploaded_file is not None and "df_bloque_masiva" in locals():
+    bloque_sin_filas = len(edited_records) == 0
 
-st.button(
-    "✅ Guardar carga masiva en Google Sheets",
-    disabled=(
-        uploaded_file is None
-        or not filas
-        or bool(errores_totales)
-        or st.session_state.get("guardando_masiva", False)
-        or st.session_state.get("masiva_guardado_ok", False)
-    ),
-    on_click=activar_guardado_masivo,
-)
+    if bloque_sin_filas:
+        texto_boton_bloque = (
+            f"➡️ Continuar al bloque {numero_bloque_visible + 1}"
+            if numero_bloque_visible < total_bloques_masiva
+            else "✅ Finalizar proceso"
+        )
+    else:
+        texto_boton_bloque = (
+            f"✅ Guardar bloque {numero_bloque_visible} y continuar"
+            if numero_bloque_visible < total_bloques_masiva
+            else f"✅ Guardar bloque {numero_bloque_visible} y finalizar"
+        )
+
+    if st.session_state.get("guardando_masiva", False):
+        st.info("Procesando el bloque actual. Por favor, espera un momento...")
+
+    st.button(
+        texto_boton_bloque,
+        disabled=(
+            bool(errores_totales)
+            or st.session_state.get("guardando_masiva", False)
+        ),
+        on_click=activar_guardado_masivo,
+        key=f"btn_guardar_bloque_{bloque_actual_masiva}",
+    )
 
 if st.session_state.get("guardar_masiva_pendiente", False):
     st.session_state.guardar_masiva_pendiente = False
 
-    if uploaded_file is None or not filas or bool(errores_totales):
+    if uploaded_file is None or bool(errores_totales):
         st.session_state.guardando_masiva = False
-        st.error("No es posible guardar la carga masiva porque hay validaciones pendientes o no hay registros válidos.")
+        st.error("No es posible continuar porque el bloque actual tiene validaciones pendientes.")
         st.stop()
 
     try:
-        with st.spinner("Guardando registros en lote..."):
-            guardar_lote_google_sheets_seguro(filas)
+        cantidad_guardada = 0
+
+        if filas:
+            with st.spinner(
+                f"Guardando bloque {numero_bloque_visible} de {total_bloques_masiva}..."
+            ):
+                guardado_correcto = guardar_lote_google_sheets_seguro(filas)
+
+            if not guardado_correcto:
+                st.session_state.guardando_masiva = False
+                st.error(
+                    "El bloque no pudo guardarse. No se avanzará al siguiente para evitar pérdida de datos."
+                )
+                st.stop()
+
+            cantidad_guardada = len(filas)
+
+        resumen_bloque = (
+            f"✅ Bloque {numero_bloque_visible}: {cantidad_guardada} guardados · "
+            f"{total_eliminados_bloque} eliminados"
+        )
+        st.session_state.setdefault("masiva_resumen_bloques", []).append(resumen_bloque)
+        st.session_state.setdefault("masiva_bloques_guardados", []).append(bloque_actual_masiva)
+
+        for indice_finalizado in range(inicio_bloque_masiva, fin_bloque_masiva):
+            limpiar_estado_registro_masivo(indice_finalizado)
+
         st.cache_data.clear()
         st.session_state.guardando_masiva = False
-        st.session_state.masiva_guardado_ok = True
-        st.success(f"✅ Carga masiva finalizada. Registros guardados: {len(filas)}")
+        st.session_state.masiva_bloque_actual = bloque_actual_masiva + 1
+        st.rerun()
+
     except Exception as e:
         st.session_state.guardando_masiva = False
-        st.error(f"❌ Error al guardar la carga masiva: {e}")
+        st.error(f"❌ Error al procesar el bloque actual: {e}")
 
 print("[BOOT 08] Ejecución del script completada", flush=True)
