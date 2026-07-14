@@ -1433,7 +1433,7 @@ if uploaded_file is not None:
                 else:
                     titulo_expander = f"🟢 {idx_masiva + 1}. {loc_row}"
 
-                with st.expander(titulo_expander, expanded=(posicion_bloque < 3)):
+                with st.expander(titulo_expander, expanded=(posicion_bloque < 0)):
                     url_reserva_masiva = (
                         "https://www.europamundo-online.com/reservas/"
                         f"buscarreserva2.asp?coreserva={loc_row}"
