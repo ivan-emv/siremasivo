@@ -24,7 +24,7 @@ SHEET_ID_REGISTROS = "19v6_WKu7dNoRiyRwgP4ZbXF047jd-MZJba6lJGP3iT0"
 WS_DATOS = "DATOS"
 WS_COMPLETO = "COMPLETO"
 
-TAMANO_BLOQUE_MASIVA = 15
+TAMANO_BLOQUE_MASIVA = 5
 
 RESOLUCIONES = [
     "SELECCIONE", "Reembolso Parcial/Partial Reimbursement", "Reembolso Total/Total Reimbursement",
