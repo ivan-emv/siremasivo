@@ -319,7 +319,8 @@ def obtener_tipos_incidencia_por_area_masiva(area_valor: str) -> list:
         ]
     if area_norm == "Generales/General" or area_norm == "Itinerario/Itinerary" or area_norm == "Otros/Other":
         return [
-            "", "Itinerario - Fuerza Mayor/Force Majeure", "Itinerario - Muchos Idiomas/Several Languages",
+            "", "Aéreos - KANNAK",
+            "Itinerario - Fuerza Mayor/Force Majeure", "Itinerario - Muchos Idiomas/Several Languages",
             "Itinerario - Parada en Tiendas/Shop Stops",
             "Itinerario - Itinerario no Seguido/Unfollowed Timetable",
             "Itinerario - Otro/Other", "Asistencia - No relacionado a EMV/No relation to EMV",
